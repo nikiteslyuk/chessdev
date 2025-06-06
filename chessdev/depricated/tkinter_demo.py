@@ -43,10 +43,18 @@ PIECE_MAP = {
     "k": "bk.png",
 }
 
+
 class ChessGUI(tk.Tk):
-    def __init__(self, fen=None, my_color=None, flip_board=False,
-                 white_name='White', black_name='Black',
-                 quit_callback=None, username=None):
+    def __init__(
+        self,
+        fen=None,
+        my_color=None,
+        flip_board=False,
+        white_name="White",
+        black_name="Black",
+        quit_callback=None,
+        username=None,
+    ):
         super().__init__()
         self.title("Chess Tkinter Client")
         self.resizable(False, False)
@@ -58,12 +66,14 @@ class ChessGUI(tk.Tk):
         self.black_name = black_name
         self.quit_callback = quit_callback
         self.board = chess.Board(fen) if fen else chess.Board()
-        self.canvas = Canvas(self, width=CANVAS_W, height=CANVAS_H, bg="white", highlightthickness=0)
+        self.canvas = Canvas(
+            self, width=CANVAS_W, height=CANVAS_H, bg="white", highlightthickness=0
+        )
         self.canvas.pack()
         self.font = ("Helvetica", 32, "bold")
         self.label_font = ("Helvetica", 20, "bold")
         self.figures = self._load_figures()
-        self._drag = {'sq': None, 'img_id': None, 'from': None, 'piece': None}
+        self._drag = {"sq": None, "img_id": None, "from": None, "piece": None}
         self._legal_moves = set()
         self._capture_moves = set()
         self._last_move = None
@@ -79,7 +89,9 @@ class ChessGUI(tk.Tk):
     def _load_figures(self):
         figures = {}
         for k, filename in PIECE_MAP.items():
-            img = Image.open(os.path.join(FIGDIR, filename)).resize((SQ, SQ), Image.LANCZOS)
+            img = Image.open(os.path.join(FIGDIR, filename)).resize(
+                (SQ, SQ), Image.LANCZOS
+            )
             figures[k] = ImageTk.PhotoImage(img)
         return figures
 
@@ -108,7 +120,8 @@ class ChessGUI(tk.Tk):
 
     def sq_from_xy(self, x, y):
         y_on_board = y - TOP_MARGIN
-        if y_on_board < 0 or y_on_board >= SQ * 8: return None
+        if y_on_board < 0 or y_on_board >= SQ * 8:
+            return None
         f = x // SQ
         r = y_on_board // SQ
         board_r = r if self.flip_board else 7 - r
@@ -120,14 +133,21 @@ class ChessGUI(tk.Tk):
         if self._game_over or self._promo_menu:
             return
         sq = self.sq_from_xy(event.x, event.y)
-        if sq is None: return
+        if sq is None:
+            return
         piece = self.board.piece_at(sq)
-        if piece and (self.my_color is None or
-                      (self.my_color == 'white' and piece.color == chess.WHITE) or
-                      (self.my_color == 'black' and piece.color == chess.BLACK)) and piece.color == self.board.turn:
-            self._drag['sq'] = sq
-            self._drag['from'] = (event.x, event.y)
-            self._drag['piece'] = piece
+        if (
+            piece
+            and (
+                self.my_color is None
+                or (self.my_color == "white" and piece.color == chess.WHITE)
+                or (self.my_color == "black" and piece.color == chess.BLACK)
+            )
+            and piece.color == self.board.turn
+        ):
+            self._drag["sq"] = sq
+            self._drag["from"] = (event.x, event.y)
+            self._drag["piece"] = piece
             self._legal_moves = set()
             self._capture_moves = set()
             for mv in self.board.legal_moves:
@@ -139,23 +159,23 @@ class ChessGUI(tk.Tk):
         self._redraw()
 
     def on_drag(self, event):
-        if self._drag['sq'] is None:
+        if self._drag["sq"] is None:
             return
-        self._drag['img_id'] = (event.x, event.y)
+        self._drag["img_id"] = (event.x, event.y)
         self._redraw()
 
     def on_release(self, event):
-        if self._drag['sq'] is None:
+        if self._drag["sq"] is None:
             return
         to_sq = self.sq_from_xy(event.x, event.y)
         move = None
         for mv in self.board.legal_moves:
-            if mv.from_square == self._drag['sq'] and mv.to_square == to_sq:
+            if mv.from_square == self._drag["sq"] and mv.to_square == to_sq:
                 move = mv
                 break
         if move:
-            self._start_animation(self._drag['sq'], to_sq, self._drag['piece'], move)
-        self._drag = {'sq': None, 'img_id': None, 'from': None, 'piece': None}
+            self._start_animation(self._drag["sq"], to_sq, self._drag["piece"], move)
+        self._drag = {"sq": None, "img_id": None, "from": None, "piece": None}
         self._legal_moves.clear()
         self._capture_moves.clear()
         self._redraw()
@@ -163,42 +183,51 @@ class ChessGUI(tk.Tk):
     def _start_animation(self, from_sq, to_sq, piece, move):
         start_x, start_y = self.coords(from_sq)
         end_x, end_y = self.coords(to_sq)
-        self._anims.append({
-            'piece': piece,
-            'from': from_sq,
-            'to': to_sq,
-            'img': self.figures[piece.symbol()],
-            'sx': start_x, 'sy': start_y,
-            'ex': end_x, 'ey': end_y,
-            'step': 0,
-            'move': move
-        })
+        self._anims.append(
+            {
+                "piece": piece,
+                "from": from_sq,
+                "to": to_sq,
+                "img": self.figures[piece.symbol()],
+                "sx": start_x,
+                "sy": start_y,
+                "ex": end_x,
+                "ey": end_y,
+                "step": 0,
+                "move": move,
+            }
+        )
         self._animate_step()
 
     def _animate_step(self):
         need_redraw = False
         still_anim = []
         for anim in self._anims:
-            anim['step'] += 1
-            t = min(1, anim['step'] / ANIM_FRAMES)
-            ease = 1 - (1-t)*(1-t)
-            cur_x = int(anim['sx'] + (anim['ex'] - anim['sx']) * ease)
-            cur_y = int(anim['sy'] + (anim['ey'] - anim['sy']) * ease)
-            anim['cx'], anim['cy'] = cur_x, cur_y
+            anim["step"] += 1
+            t = min(1, anim["step"] / ANIM_FRAMES)
+            ease = 1 - (1 - t) * (1 - t)
+            cur_x = int(anim["sx"] + (anim["ex"] - anim["sx"]) * ease)
+            cur_y = int(anim["sy"] + (anim["ey"] - anim["sy"]) * ease)
+            anim["cx"], anim["cy"] = cur_x, cur_y
             if t < 1:
                 still_anim.append(anim)
             else:
-                self.board.push(anim['move'])
-                self._last_move = anim['move']
+                self.board.push(anim["move"])
+                self._last_move = anim["move"]
                 # Промо-меню (если надо)
-                if (anim['piece'].piece_type == chess.PAWN and
-                    (chess.square_rank(anim['to']) == 0 or chess.square_rank(anim['to']) == 7) and
-                    not anim['move'].promotion):
-                    self._show_promo_menu(anim['to'], anim['move'])
+                if (
+                    anim["piece"].piece_type == chess.PAWN
+                    and (
+                        chess.square_rank(anim["to"]) == 0
+                        or chess.square_rank(anim["to"]) == 7
+                    )
+                    and not anim["move"].promotion
+                ):
+                    self._show_promo_menu(anim["to"], anim["move"])
         self._anims = still_anim
         self._redraw()
         if self._anims:
-            self.after_id = self.after(int(1000/FPS), self._animate_step)
+            self.after_id = self.after(int(1000 / FPS), self._animate_step)
         else:
             self.after_id = None
 
@@ -220,41 +249,58 @@ class ChessGUI(tk.Tk):
         for r in range(8):
             for f in range(8):
                 draw_r = r if self.flip_board else 7 - r
-                x, y = f*SQ, draw_r*SQ + TOP_MARGIN
-                color = COL_L if (f+r)%2 else COL_D
-                self.canvas.create_rectangle(x, y, x+SQ, y+SQ, fill=color, width=0)
+                x, y = f * SQ, draw_r * SQ + TOP_MARGIN
+                color = COL_L if (f + r) % 2 else COL_D
+                self.canvas.create_rectangle(x, y, x + SQ, y + SQ, fill=color, width=0)
 
         # Подсветки ходов и последнего хода
         if self._last_move:
             for sq in [self._last_move.from_square, self._last_move.to_square]:
                 x, y = self.coords(sq)
-                self.canvas.create_rectangle(x, y, x+SQ, y+SQ, fill=CLR_LAST, stipple="gray50", width=0)
+                self.canvas.create_rectangle(
+                    x, y, x + SQ, y + SQ, fill=CLR_LAST, stipple="gray50", width=0
+                )
         for sq in self._legal_moves:
             x, y = self.coords(sq)
-            self.canvas.create_rectangle(x, y, x+SQ, y+SQ, fill=CLR_MOVE, stipple="gray25", width=0)
+            self.canvas.create_rectangle(
+                x, y, x + SQ, y + SQ, fill=CLR_MOVE, stipple="gray25", width=0
+            )
         for sq in self._capture_moves:
             x, y = self.coords(sq)
-            self.canvas.create_rectangle(x, y, x+SQ, y+SQ, fill=CLR_CAP, stipple="gray50", width=0)
+            self.canvas.create_rectangle(
+                x, y, x + SQ, y + SQ, fill=CLR_CAP, stipple="gray50", width=0
+            )
         if self.board.is_check():
             ksq = self.board.king(self.board.turn)
             x, y = self.coords(ksq)
-            self.canvas.create_rectangle(x, y, x+SQ, y+SQ, fill=CLR_CHK, stipple="gray50", width=0)
+            self.canvas.create_rectangle(
+                x, y, x + SQ, y + SQ, fill=CLR_CHK, stipple="gray50", width=0
+            )
 
         # Фигуры
         positions = self.board.piece_map()
-        dragging = self._drag['sq']
+        dragging = self._drag["sq"]
         for sq, piece in positions.items():
             if sq == dragging:
                 continue
             x, y = self.coords(sq)
-            self.canvas.create_image(x, y, anchor=NW, image=self.figures[piece.symbol()])
+            self.canvas.create_image(
+                x, y, anchor=NW, image=self.figures[piece.symbol()]
+            )
         # Анимация
         for anim in self._anims:
-            self.canvas.create_image(anim['cx'], anim['cy'], anchor=NW, image=anim['img'])
+            self.canvas.create_image(
+                anim["cx"], anim["cy"], anchor=NW, image=anim["img"]
+            )
         # Dragged фигура
-        if dragging and self._drag['img_id']:
-            dx, dy = self._drag['img_id']
-            self.canvas.create_image(dx-SQ//2, dy-SQ//2, anchor=NW, image=self.figures[self._drag['piece'].symbol()])
+        if dragging and self._drag["img_id"]:
+            dx, dy = self._drag["img_id"]
+            self.canvas.create_image(
+                dx - SQ // 2,
+                dy - SQ // 2,
+                anchor=NW,
+                image=self.figures[self._drag["piece"].symbol()],
+            )
         # Промо-меню
         if self._promo_menu:
             self._promo_menu.redraw()
@@ -264,8 +310,22 @@ class ChessGUI(tk.Tk):
     def _draw_labels(self):
         bottom_label = self.white_name if (not self.flip_board) else self.black_name
         top_label = self.black_name if (not self.flip_board) else self.white_name
-        self.canvas.create_text(SQ*4, TOP_MARGIN//2, text=top_label, font=self.label_font, fill="black", anchor=CENTER)
-        self.canvas.create_text(SQ*4, TOP_MARGIN+SQ*8+BOTTOM_MARGIN//2, text=bottom_label, font=self.label_font, fill="black", anchor=CENTER)
+        self.canvas.create_text(
+            SQ * 4,
+            TOP_MARGIN // 2,
+            text=top_label,
+            font=self.label_font,
+            fill="black",
+            anchor=CENTER,
+        )
+        self.canvas.create_text(
+            SQ * 4,
+            TOP_MARGIN + SQ * 8 + BOTTOM_MARGIN // 2,
+            text=bottom_label,
+            font=self.label_font,
+            fill="black",
+            anchor=CENTER,
+        )
 
     def _on_quit(self):
         if self.quit_callback:
@@ -274,24 +334,33 @@ class ChessGUI(tk.Tk):
             self.after_cancel(self.after_id)
         self.destroy()
 
+
 class PromoMenu(tk.Toplevel):
     def __init__(self, master, to_sq, move, callback):
         super().__init__(master)
         self.overrideredirect(True)
         self.transient(master)
-        self.canvas = Canvas(self, width=SQ, height=SQ*4+36, bg="#222")
+        self.canvas = Canvas(self, width=SQ, height=SQ * 4 + 36, bg="#222")
         self.canvas.pack()
         self.callback = callback
         self.pieces = [chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT]
         self.images = []
-        color = 'w' if master.board.turn else 'b'
+        color = "w" if master.board.turn else "b"
         y0 = 0
         for idx, p in enumerate(self.pieces):
-            filename = PIECE_MAP[('QNRBKNqrbn'.lower()[(p-1)+(0 if color=='w' else 6)])]
-            img = Image.open(os.path.join(FIGDIR, filename)).resize((SQ, SQ), Image.LANCZOS)
+            filename = PIECE_MAP[
+                ("QNRBKNqrbn".lower()[(p - 1) + (0 if color == "w" else 6)])
+            ]
+            img = Image.open(os.path.join(FIGDIR, filename)).resize(
+                (SQ, SQ), Image.LANCZOS
+            )
             self.images.append(ImageTk.PhotoImage(img))
-            self.canvas.create_image(0, y0, anchor=NW, image=self.images[-1], tags=f"piece{idx}")
-            self.canvas.tag_bind(f"piece{idx}", "<Button-1>", lambda e, pt=p: self.pick(pt))
+            self.canvas.create_image(
+                0, y0, anchor=NW, image=self.images[-1], tags=f"piece{idx}"
+            )
+            self.canvas.tag_bind(
+                f"piece{idx}", "<Button-1>", lambda e, pt=p: self.pick(pt)
+            )
             y0 += SQ + 12
         # Position window over the to_sq
         x, y = master.coords(to_sq)
@@ -305,8 +374,15 @@ class PromoMenu(tk.Toplevel):
     def redraw(self):
         self.canvas.update()
 
+
 # --- DEMO ---
 if __name__ == "__main__":
     # Просто для проверки: локально без сервера!
-    gui = ChessGUI(fen=None, my_color='white', flip_board=False, white_name='White', black_name='Black')
+    gui = ChessGUI(
+        fen=None,
+        my_color="white",
+        flip_board=False,
+        white_name="White",
+        black_name="Black",
+    )
     gui.mainloop()

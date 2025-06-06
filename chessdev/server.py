@@ -70,6 +70,7 @@ class ChessServer:
                             tid += 1
                         table = Table(tid)
                         import random
+
                         if color is None:
                             color = random.choice(["white", "black"])
                         if color == "white":
@@ -78,7 +79,9 @@ class ChessServer:
                             table.black = user
                         self.tables[tid] = table
                         resp["data"] = {"table_id": tid, "color": color}
-                        resp["msg"] = f"Table {tid} created, you play as {color}, waiting for second player"
+                        resp["msg"] = (
+                            f"Table {tid} created, you play as {color}, waiting for second player"
+                        )
 
                 elif cmd["action"] == "list_tables":
                     async with self.lock:
@@ -90,7 +93,11 @@ class ChessServer:
                                 "in_game": (
                                     t.white is not None and t.black is not None
                                 ),
-                                "active_players": list(t.active_players) if hasattr(t, "active_players") else []
+                                "active_players": (
+                                    list(t.active_players)
+                                    if hasattr(t, "active_players")
+                                    else []
+                                ),
                             }
                             for t in self.tables.values()
                         ]
@@ -111,7 +118,9 @@ class ChessServer:
                                         t.black = user
                                         color = "black"
                                     resp["data"] = {"table_id": t.id, "color": color}
-                                    resp["msg"] = f"Fastjoined to table {t.id} as {color}"
+                                    resp["msg"] = (
+                                        f"Fastjoined to table {t.id} as {color}"
+                                    )
                                     break
                             if not found:
                                 resp["status"] = "err"
@@ -136,7 +145,6 @@ class ChessServer:
                                 if color:
                                     resp["msg"] = f"You joined table {tid} as {color}"
                                     resp["data"] = {"color": color}
-
 
                 elif cmd["action"] == "move":
                     tid, uci = cmd["table_id"], cmd["uci"]
@@ -173,21 +181,21 @@ class ChessServer:
                         else:
                             t = self.tables[tid]
                             resp["data"] = t.board.fen()
-                elif cmd['action'] == 'leave':
-                    tid, color, user = cmd['table_id'], cmd['color'], cmd['user']
+                elif cmd["action"] == "leave":
+                    tid, color, user = cmd["table_id"], cmd["color"], cmd["user"]
                     async with self.lock:
                         if tid in self.tables:
                             t = self.tables[tid]
-                            if color == 'white' and t.white == user:
+                            if color == "white" and t.white == user:
                                 t.white = None
-                            elif color == 'black' and t.black == user:
+                            elif color == "black" and t.black == user:
                                 t.black = None
                             if t.white is None and t.black is None:
                                 del self.tables[tid]
-                            resp['msg'] = f"{user} left table {tid} ({color})"
+                            resp["msg"] = f"{user} left table {tid} ({color})"
                         else:
-                            resp['status'] = 'err'
-                            resp['msg'] = 'No such table'
+                            resp["status"] = "err"
+                            resp["msg"] = "No such table"
 
                 out_data = pickle.dumps(resp)
                 writer.write(len(out_data).to_bytes(4, "big"))
