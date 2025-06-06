@@ -18,14 +18,15 @@ class Table:
         self.black = black
         self.board = chess.Board()
         self.spectators = []
+        self.active_players = set()
 
 
 class ChessServer:
     def __init__(self):
-        self.users = {}  # name -> Player
-        self.tables = {}  # id -> Table
+        self.users = {}
+        self.tables = {}
         self.table_id_seq = 1
-        self.lock = asyncio.Lock()  # Асинхронный лок
+        self.lock = asyncio.Lock()
 
     async def handle(self, reader, writer):
         user = None
@@ -48,19 +49,36 @@ class ChessServer:
                             resp["msg"] = f"Welcome, {name}"
                             user = name
 
-                elif cmd["action"] == "create":
-                    color = cmd["color"]
+                elif cmd["action"] == "ready_play":
+                    tid = cmd["table_id"]
+                    user = cmd["user"]
                     async with self.lock:
-                        tid = self.table_id_seq
-                        self.table_id_seq += 1
+                        if tid not in self.tables:
+                            resp["status"] = "err"
+                            resp["msg"] = "No such table"
+                        else:
+                            t = self.tables[tid]
+                            t.active_players.add(user)
+                            resp["msg"] = f"{user} is ready"
+
+                elif cmd["action"] == "createtable":
+                    color = cmd.get("color", None)
+                    async with self.lock:
+                        existing_ids = set(self.tables.keys())
+                        tid = 1
+                        while tid in existing_ids:
+                            tid += 1
                         table = Table(tid)
+                        import random
+                        if color is None:
+                            color = random.choice(["white", "black"])
                         if color == "white":
                             table.white = user
                         elif color == "black":
                             table.black = user
                         self.tables[tid] = table
-                        resp["data"] = {"table_id": tid}
-                        resp["msg"] = f"Table {tid} created, waiting for second player"
+                        resp["data"] = {"table_id": tid, "color": color}
+                        resp["msg"] = f"Table {tid} created, you play as {color}, waiting for second player"
 
                 elif cmd["action"] == "list_tables":
                     async with self.lock:
@@ -72,33 +90,53 @@ class ChessServer:
                                 "in_game": (
                                     t.white is not None and t.black is not None
                                 ),
+                                "active_players": list(t.active_players) if hasattr(t, "active_players") else []
                             }
                             for t in self.tables.values()
                         ]
                         resp["data"] = tables
 
                 elif cmd["action"] == "join":
-                    tid = cmd["table_id"]
-                    color = cmd["color"]
+                    tid = cmd.get("table_id", None)
                     async with self.lock:
-                        if tid not in self.tables:
-                            resp["status"] = "err"
-                            resp["msg"] = "No such table"
+                        if tid is None:
+                            found = False
+                            for t in self.tables.values():
+                                if not (t.white and t.black):
+                                    found = True
+                                    if not t.white:
+                                        t.white = user
+                                        color = "white"
+                                    else:
+                                        t.black = user
+                                        color = "black"
+                                    resp["data"] = {"table_id": t.id, "color": color}
+                                    resp["msg"] = f"Fastjoined to table {t.id} as {color}"
+                                    break
+                            if not found:
+                                resp["status"] = "err"
+                                resp["msg"] = "No available tables. Create one!"
                         else:
-                            t = self.tables[tid]
-                            if color == "white":
-                                if t.white:
-                                    resp["status"] = "err"
-                                    resp["msg"] = "White is taken"
-                                else:
-                                    t.white = user
+                            if tid not in self.tables:
+                                resp["status"] = "err"
+                                resp["msg"] = "No such table"
                             else:
-                                if t.black:
-                                    resp["status"] = "err"
-                                    resp["msg"] = "Black is taken"
-                                else:
+                                t = self.tables[tid]
+                                color = None
+                                if not t.white:
+                                    t.white = user
+                                    color = "white"
+                                elif not t.black:
                                     t.black = user
-                            resp["msg"] = f"You joined table {tid} as {color}"
+                                    color = "black"
+                                else:
+                                    resp["status"] = "err"
+                                    resp["msg"] = "Both seats are taken"
+                                    color = None
+                                if color:
+                                    resp["msg"] = f"You joined table {tid} as {color}"
+                                    resp["data"] = {"color": color}
+
 
                 elif cmd["action"] == "move":
                     tid, uci = cmd["table_id"], cmd["uci"]
@@ -135,7 +173,7 @@ class ChessServer:
                         else:
                             t = self.tables[tid]
                             resp["data"] = t.board.fen()
-                elif cmd['action'] == 'quit_table':
+                elif cmd['action'] == 'leave':
                     tid, color, user = cmd['table_id'], cmd['color'], cmd['user']
                     async with self.lock:
                         if tid in self.tables:
@@ -144,7 +182,6 @@ class ChessServer:
                                 t.white = None
                             elif color == 'black' and t.black == user:
                                 t.black = None
-                            # Если оба ушли, удалить стол
                             if t.white is None and t.black is None:
                                 del self.tables[tid]
                             resp['msg'] = f"{user} left table {tid} ({color})"
@@ -159,6 +196,10 @@ class ChessServer:
         except (asyncio.IncompleteReadError, ConnectionResetError):
             pass
         finally:
+            if user is not None:
+                async with self.lock:
+                    if user in self.users:
+                        del self.users[user]
             writer.close()
             await writer.wait_closed()
 

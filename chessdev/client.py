@@ -34,18 +34,24 @@ def get_table_info(sock, table_id):
     return None
 
 def play_game_pygame(table_id, sock, my_color=None, flip_board=False, quit_callback=None, username=None):
-    SQ, FPS, FIGDIR = 96, 120, "figures"
+    SQ, FPS, FIGDIR = 96, 60, "figures"
     COL_L, COL_D = (240,217,181), (181,136,99)
     CLR_LAST, CLR_MOVE, CLR_CAP, CLR_CHK = (0,120,215,120), (255,255,0,120), (255,0,0,120), (200,0,0,150)
     MASK_MATE, MASK_PATT = (200,0,0,130), (128,128,128,130)
     ANIM_FRAMES = 12
+    TOP_MARGIN = 40
+    BOTTOM_MARGIN = 40
 
     pygame.init()
-    screen = pygame.display.set_mode((SQ*8, SQ*8 + 60))
+    pygame.font.init()
+
+    screen = pygame.display.set_mode((SQ*8, TOP_MARGIN + SQ*8 + BOTTOM_MARGIN))
     pygame.display.set_caption(f"Table {table_id}")
     clock = pygame.time.Clock()
     font = pygame.font.SysFont(None, 48)
     label_font = pygame.font.SysFont(None, 40)
+    font_big = pygame.font.SysFont(None, 64)
+    font_small = pygame.font.SysFont(None, 32)
 
     MAP = {chess.PAWN:"p",chess.KNIGHT:"kn",chess.BISHOP:"b",
            chess.ROOK:"r",chess.QUEEN:"q",chess.KING:"k"}
@@ -63,12 +69,13 @@ def play_game_pygame(table_id, sock, my_color=None, flip_board=False, quit_callb
         f = chess.square_file(sq)
         r = chess.square_rank(sq)
         r = r if flip_board else 7 - r
-        return f*SQ+SQ//2, r*SQ+SQ//2
+        return f*SQ+SQ//2, r*SQ+SQ//2 + TOP_MARGIN
 
     def mouse_sq(x,y):
-        if y >= SQ*8: return None
+        y_on_board = y - TOP_MARGIN
+        if y_on_board < 0 or y_on_board >= SQ*8: return None
         f = x // SQ
-        r = y // SQ
+        r = y_on_board // SQ
         board_r = r if flip_board else 7 - r
         if 0 <= f < 8 and 0 <= board_r < 8:
             return chess.square(f, board_r)
@@ -90,7 +97,7 @@ def play_game_pygame(table_id, sock, my_color=None, flip_board=False, quit_callb
             w=h=SQ; pad=12; H=h*4+pad*3
             f,r=chess.square_file(to_sq),chess.square_rank(to_sq)
             r_p = r if flip_board else 7 - r
-            x=f*SQ; y=r_p*SQ+SQ if r_p*SQ+SQ+H<=SQ*8 else r_p*SQ-H
+            x=f*SQ; y=r_p*SQ+SQ+TOP_MARGIN if r_p*SQ+SQ+H+TOP_MARGIN<=TOP_MARGIN+SQ*8 else r_p*SQ+TOP_MARGIN-H
             self.rects=[]; self.top=(x,y)
             self.surf=pygame.Surface((w,H),pygame.SRCALPHA); self.surf.fill((30,30,30,230))
             for i,pt in enumerate(self.opts):
@@ -102,7 +109,58 @@ def play_game_pygame(table_id, sock, my_color=None, flip_board=False, quit_callb
                 if r.collidepoint(p): return pt
             return None
 
-    # Board state and anim queue
+    def send_move(move):
+        uci = move.uci()
+        send_recv(sock, {'action': 'move', 'table_id': table_id, 'uci': uci})
+
+    
+    def draw_labels(table_info):
+        if table_info:
+            white = table_info.get('white', '')
+            black = table_info.get('black', '')
+            active_players = set(table_info.get('active_players', []))
+        else:
+            white = "White"
+            black = "Black"
+            active_players = set()
+
+        if not white or white not in active_players:
+            white_label = "Ожидание белых"
+        else:
+            white_label = white
+
+        if not black or black not in active_players:
+            black_label = "Ожидание чёрных"
+        else:
+            black_label = black
+
+        if my_color == 'white':
+            my_name = username if username else white_label
+            opp_name = black_label if black_label != my_name else "Ожидание чёрных"
+        elif my_color == 'black':
+            my_name = username if username else black_label
+            opp_name = white_label if white_label != my_name else "Ожидание белых"
+        else:
+            my_name = white_label
+            opp_name = black_label
+
+        if flip_board:
+            bottom_label = my_name
+            top_label = opp_name
+        else:
+            bottom_label = my_name if my_color != 'black' else opp_name
+            top_label = opp_name if my_color != 'black' else my_name
+
+        if top_label:
+            top_text = label_font.render(str(top_label), True, (0,0,0))
+            top_rect = top_text.get_rect(center=(SQ*4, TOP_MARGIN // 2))
+            screen.blit(top_text, top_rect)
+        if bottom_label:
+            bottom_text = label_font.render(str(bottom_label), True, (0,0,0))
+            bottom_rect = bottom_text.get_rect(center=(SQ*4, TOP_MARGIN + SQ*8 + BOTTOM_MARGIN//2))
+            screen.blit(bottom_text, bottom_rect)
+
+
     resp = send_recv(sock, {'action': 'get_board', 'table_id': table_id})
     if resp['status'] != 'ok':
         print("Ошибка: нет такой партии!")
@@ -115,102 +173,58 @@ def play_game_pygame(table_id, sock, my_color=None, flip_board=False, quit_callb
     last=None
     anims=[]; pending=None; promo=None; game_over=False
 
-    prev_board_fen = board.fen()
-    need_anim = False
-
     my_is_white = (my_color == 'white')
     my_is_black = (my_color == 'black')
     my_is_player = (my_is_white or my_is_black)
 
-    # Для вывода имен игроков
-    def draw_labels(table_info):
-        # Верх (opponent/black для white, white для black)
-        opp_name = None
-        my_name = username if username else (my_color or '')
-        if table_info:
-            if my_color == 'white':
-                opp_name = table_info.get('black')
-            elif my_color == 'black':
-                opp_name = table_info.get('white')
-            else:
-                opp_name = None
-            if not opp_name:
-                opp_name = "Оппонент вышел, ждем следующего"
-        else:
-            opp_name = ""
-        if flip_board:
-            top_label = my_name
-            bottom_label = opp_name
-        else:
-            top_label = opp_name
-            bottom_label = my_name
-        # Верхний
-        if top_label:
-            top_text = label_font.render(str(top_label), True, (0,0,0))
-            top_rect = top_text.get_rect(center=(SQ*4, 24))
-            screen.blit(top_text, top_rect)
-        # Нижний
-        if bottom_label:
-            bottom_text = label_font.render(str(bottom_label), True, (0,0,0))
-            bottom_rect = bottom_text.get_rect(center=(SQ*4, SQ*8+36))
-            screen.blit(bottom_text, bottom_rect)
+    POLL_INTERVAL = 0.3
+    last_poll = 0
+    pending_fen = None
 
-    def reload_board(with_anim=True):
-        nonlocal board, last, legal_sqs, capture_sqs, promo, pending, anims, game_over, prev_board_fen, need_anim
-        resp = send_recv(sock, {'action': 'get_board', 'table_id': table_id})
-        new_board = chess.Board(resp['data'])
-        # Находим ход, чтобы отобразить анимацию
-        if with_anim and board.fen() != new_board.fen():
-            move = None
-            for mv in board.legal_moves:
-                test_board = board.copy()
-                test_board.push(mv)
-                if test_board.fen() == new_board.fen():
-                    move = mv
-                    break
-            if move:
-                s, t = sq_center(move.from_square), sq_center(move.to_square)
-                anims.append(Anim(board.piece_at(move.from_square).piece_type, board.turn, (s[0]-SQ//2, s[1]-SQ//2), (t[0]-SQ//2, t[1]-SQ//2), move.from_square))
-                if board.is_castling(move):
-                    rf, rt = ((7,5) if chess.square_file(move.to_square)==6 else (0,3))
-                    rf, rt = chess.square(rf, chess.square_rank(move.to_square)), chess.square(rt, chess.square_rank(move.to_square))
-                    rs, rtg = sq_center(rf), sq_center(rt)
-                    rook = board.piece_at(rf)
-                    anims.append(Anim(rook.piece_type, rook.color, (rs[0]-SQ//2, rs[1]-SQ//2), (rtg[0]-SQ//2, rtg[1]-SQ//2), rf))
-            else:
-                # Если не нашли ход — просто обновляем
-                pass
-        prev_board_fen = board.fen()
-        board.set_fen(new_board.fen())
-        last = None
-        legal_sqs.clear(); capture_sqs.clear()
-        pending = None; promo = None; #anims.clear()
-        game_over = board.is_game_over()
-        need_anim = False
+    has_left_table = False
+    left_table_time = None
+
+    if board.is_checkmate() or board.is_stalemate():
+        game_over = True
 
     running = True
     while running:
         dt=clock.tick(FPS)
+        now = time.time()
+
         for e in pygame.event.get():
-            if e.type == pygame.QUIT:
-                running=False
+            if e.type == pygame.QUIT or (e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE):
+                has_left_table = True
+                left_table_time = time.time()
                 if quit_callback: quit_callback()
-            if e.type == pygame.KEYDOWN and (e.key == pygame.K_ESCAPE):
-                running = False
-                if quit_callback: quit_callback()
+                break
+
+            if has_left_table:
+                if e.type in [pygame.MOUSEBUTTONDOWN, pygame.KEYDOWN]:
+                    running = False
+                    break
+                continue
+
+            
             if game_over:
                 continue
+
             if promo:
                 if e.type==pygame.MOUSEBUTTONDOWN and e.button==1:
                     ptype=promo.click(e.pos)
                     if ptype:
-                        pending.promotion=ptype
-                        uci = pending.uci()
-                        resp = send_recv(sock, {'action':'move', 'table_id':table_id, 'uci':uci})
-                        if resp['status'] == 'ok':
-                            reload_board(with_anim=True)
-                        promo=None
-                        pending=None
+                        push_move = chess.Move(
+                            pending.from_square,
+                            pending.to_square,
+                            promotion=ptype
+                        )
+                        board.push(push_move)
+                        last = push_move
+                        promo = None
+                        send_move(push_move)
+                        pending = None
+                        if board.is_checkmate() or board.is_stalemate():
+                            game_over = True
                 continue
             if anims: continue
             if my_is_player and ((board.turn and my_is_white) or (not board.turn and my_is_black)):
@@ -242,78 +256,96 @@ def play_game_pygame(table_id, sock, my_color=None, flip_board=False, quit_callb
                     drag_sq=drag_pos=None
                     legal_sqs.clear(); capture_sqs.clear()
 
-        # --- Анимация входящего хода ---
+        if has_left_table:
+            screen.fill((0,0,0))
+            text = font_big.render("Вы покинули стол", True, (255,255,255))
+            rect = text.get_rect(center=(SQ*4, TOP_MARGIN + SQ*4))
+            screen.blit(text, rect)
+            msg = font_small.render("Для продолжения вернитесь в терминал", True, (200,200,200))
+            rect2 = msg.get_rect(center=(SQ*4, TOP_MARGIN + SQ*4 + 70))
+            screen.blit(msg, rect2)
+            pygame.display.flip()
+            if left_table_time and time.time() - left_table_time > 1:
+                running = False
+            continue
+
         if anims:
             if all(a.tick() for a in anims):
                 anims.clear()
                 if pending:
-                    # если это превращение — только показываем меню (push только после выбора)
                     if board.piece_at(pending.from_square).piece_type==chess.PAWN and chess.square_rank(pending.to_square) in (0,7):
                         promo=PromoMenu(board.turn,pending.to_square)
-                        # push делаем после выбора!
                     else:
-                        if pending:
-                            # Если это наш ход — отправляем
-                            uci = pending.uci()
-                            resp = send_recv(sock, {'action':'move', 'table_id':table_id, 'uci':uci})
-                            if resp['status'] == 'ok':
-                                reload_board(with_anim=True)
-                            pending=None
+                        board.push(pending)
+                        last=pending
+                        send_move(pending)
+                        pending=None
+                        if board.is_checkmate() or board.is_stalemate():
+                            game_over = True
+                if pending_fen:
+                    board.set_fen(pending_fen)
+                    pending_fen = None
+                    if board.is_checkmate() or board.is_stalemate():
+                        game_over = True
         elif promo and pending:
-            # ждём, когда пользователь выберет фигуру превращения (push будет там)
             pass
         else:
-            # Проверка входящих ходов — poll, и если FEN изменился, проиграть анимацию!
-            resp = send_recv(sock, {'action': 'get_board', 'table_id': table_id})
-            new_fen = resp['data']
-            if new_fen != board.fen():
-                # Найдём входящий ход и анимируем
-                new_board = chess.Board(new_fen)
-                move = None
-                for mv in board.legal_moves:
-                    test_board = board.copy()
-                    test_board.push(mv)
-                    if test_board.fen() == new_fen:
-                        move = mv
-                        break
-                if move:
-                    s, t = sq_center(move.from_square), sq_center(move.to_square)
-                    anims.append(Anim(board.piece_at(move.from_square).piece_type, board.turn, (s[0]-SQ//2, s[1]-SQ//2), (t[0]-SQ//2, t[1]-SQ//2), move.from_square))
-                    if board.is_castling(move):
-                        rf, rt = ((7,5) if chess.square_file(move.to_square)==6 else (0,3))
-                        rf, rt = chess.square(rf, chess.square_rank(move.to_square)), chess.square(rt, chess.square_rank(move.to_square))
-                        rs, rtg = sq_center(rf), sq_center(rt)
-                        rook = board.piece_at(rf)
-                        anims.append(Anim(rook.piece_type, rook.color, (rs[0]-SQ//2, rs[1]-SQ//2), (rtg[0]-SQ//2, rtg[1]-SQ//2), rf))
-                    pending = None
-                board.set_fen(new_fen)
-            time.sleep(0.1)
+            if time.time() - last_poll > POLL_INTERVAL:
+                resp = send_recv(sock, {'action': 'get_board', 'table_id': table_id})
+                new_fen = resp['data']
+                if new_fen != board.fen():
+                    new_board = chess.Board(new_fen)
+                    move = None
+                    for mv in board.legal_moves:
+                        test_board = board.copy()
+                        test_board.push(mv)
+                        if test_board.fen() == new_fen:
+                            move = mv
+                            break
+                    if move:
+                        s, t = sq_center(move.from_square), sq_center(move.to_square)
+                        anims.append(Anim(board.piece_at(move.from_square).piece_type, board.turn, 
+                                          (s[0]-SQ//2, s[1]-SQ//2), (t[0]-SQ//2, t[1]-SQ//2), move.from_square))
+                        if board.is_castling(move):
+                            rf, rt = ((7,5) if chess.square_file(move.to_square)==6 else (0,3))
+                            rf, rt = chess.square(rf, chess.square_rank(move.to_square)), chess.square(rt, chess.square_rank(move.to_square))
+                            rs, rtg = sq_center(rf), sq_center(rt)
+                            rook = board.piece_at(rf)
+                            anims.append(Anim(rook.piece_type, rook.color, (rs[0]-SQ//2, rs[1]-SQ//2), (rtg[0]-SQ//2, rtg[1]-SQ//2), rf))
+                        pending = None
+                        pending_fen = new_fen
+                        last = move
+                    else:
+                        board.set_fen(new_fen)
+                        pending_fen = None
+                        if board.is_checkmate() or board.is_stalemate():
+                            game_over = True
+                last_poll = time.time()
 
-        # --- Отрисовка
         screen.fill((255,255,255))
         for r in range(8):
             for f in range(8):
                 draw_r = r if flip_board else 7-r
-                pygame.draw.rect(screen, COL_L if (f+r)&1 else COL_D, pygame.Rect(f*SQ,draw_r*SQ,SQ,SQ))
+                pygame.draw.rect(screen, COL_L if (f+r)&1 else COL_D, pygame.Rect(f*SQ,draw_r*SQ+TOP_MARGIN,SQ,SQ))
         if not game_over:
             if not legal_sqs and not capture_sqs and last:
                 for sq in (last.from_square,last.to_square):
                     f,r=chess.square_file(sq),chess.square_rank(sq)
                     draw_r = r if flip_board else 7 - r
-                    screen.blit(S_LAST,(f*SQ,draw_r*SQ))
+                    screen.blit(S_LAST,(f*SQ,draw_r*SQ+TOP_MARGIN))
             for s in legal_sqs:
                 f,r=chess.square_file(s),chess.square_rank(s)
                 draw_r = r if flip_board else 7 - r
-                screen.blit(S_MOVE,(f*SQ,draw_r*SQ))
+                screen.blit(S_MOVE,(f*SQ,draw_r*SQ+TOP_MARGIN))
             for s in capture_sqs:
                 f,r=chess.square_file(s),chess.square_rank(s)
                 draw_r = r if flip_board else 7 - r
-                screen.blit(S_CAP,(f*SQ,draw_r*SQ))
+                screen.blit(S_CAP,(f*SQ,draw_r*SQ+TOP_MARGIN))
             if board.is_check():
                 k=board.king(board.turn)
                 f,r=chess.square_file(k),chess.square_rank(k)
                 draw_r = r if flip_board else 7 - r
-                screen.blit(S_CHK,(f*SQ,draw_r*SQ))
+                screen.blit(S_CHK,(f*SQ,draw_r*SQ+TOP_MARGIN))
         anim_orig = {a.orig for a in anims}
         promo_pending = promo is not None and pending is not None
         for sq, p in board.piece_map().items():
@@ -328,36 +360,49 @@ def play_game_pygame(table_id, sock, my_color=None, flip_board=False, quit_callb
                     continue
             f, r = chess.square_file(sq), chess.square_rank(sq)
             draw_r = r if flip_board else 7 - r
-            screen.blit(SPR[(p.color, p.piece_type)], (f * SQ, draw_r * SQ))
+            screen.blit(SPR[(p.color, p.piece_type)], (f * SQ, draw_r * SQ + TOP_MARGIN))
         if promo_pending:
             p = board.piece_at(pending.from_square)
             f, r = chess.square_file(pending.to_square), chess.square_rank(pending.to_square)
             draw_r = r if flip_board else 7 - r
-            screen.blit(SPR[(p.color, p.piece_type)], (f * SQ, draw_r * SQ))
+            screen.blit(SPR[(p.color, p.piece_type)], (f * SQ, draw_r * SQ + TOP_MARGIN))
         for a in anims:
             screen.blit(SPR[(a.col, a.ptype)], a.pos)
         if drag_sq and drag_pos:
             p = board.piece_at(drag_sq)
-            f, r = chess.square_file(drag_sq), chess.square_rank(drag_sq)
-            draw_r = r if flip_board else 7 - r
             screen.blit(SPR[(p.color, p.piece_type)], (drag_pos[0] - SQ // 2, drag_pos[1] - SQ // 2))
         if promo:
             promo.draw()
         if game_over:
-            mask=pygame.Surface((SQ*8,SQ*8),pygame.SRCALPHA)
+            mask = pygame.Surface((SQ*8, SQ*8), pygame.SRCALPHA)
             mask.fill(MASK_MATE if board.is_checkmate() else MASK_PATT)
-            screen.blit(mask,(0,0))
-            txt="Мат. Белые победили" if board.turn==chess.BLACK else \
-                ("Мат. Чёрные победили" if board.is_checkmate() else "Пат. Ничья")
-            img=font.render(txt,True,(255,255,255))
-            rect=img.get_rect(center=(SQ*4,SQ*4))
-            screen.blit(img,rect)
-
-        # --- Нарисовать лейблы имён игроков ---
+            screen.blit(mask, (0, TOP_MARGIN))
+            if board.is_checkmate():
+                winner = "Чёрные" if board.turn else "Белые"
+                txt = f"Мат. {winner} победили"
+            else:
+                txt = "Пат. Ничья"
+            img = font.render(txt, True, (255, 255, 255))
+            rect = img.get_rect(center=(SQ * 4, TOP_MARGIN + SQ * 4))
+            screen.blit(img, rect)
         table_info = get_table_info(sock, table_id)
         draw_labels(table_info)
         pygame.display.flip()
 
+
+    if has_left_table:
+        screen.fill((0,0,0))
+        text = font_big.render("Вы покинули стол", True, (255,255,255))
+        rect = text.get_rect(center=(SQ*4, TOP_MARGIN + SQ*4))
+        screen.blit(text, rect)
+        msg = font_small.render("Для продолжения вернитесь в терминал", True, (200,200,200))
+        rect2 = msg.get_rect(center=(SQ*4, TOP_MARGIN + SQ*4 + 70))
+        screen.blit(msg, rect2)
+        pygame.display.flip()
+        if left_table_time and time.time() - left_table_time > 1:
+            running = False
+
+    pygame.display.quit()
     pygame.quit()
     return
 
@@ -375,6 +420,12 @@ class ChessCmd(cmd.Cmd):
         self.current_table = None
         self.current_color = None
         self.playing = False
+        import threading
+        self.polling_thread = None
+        self.polling_stop = threading.Event()
+        self.game_start_request = threading.Event()
+
+
 
     def wait_for_opponent_and_start(self):
         print("Ожидание второго игрока...")
@@ -384,55 +435,169 @@ class ChessCmd(cmd.Cmd):
                 if t['id'] == self.current_table and t['white'] and t['black']:
                     print("Партия стартует!")
                     flip = (self.current_color == 'black')
-                    play_game_pygame(self.current_table, self.sock, my_color=self.current_color, flip_board=flip, quit_callback=self.on_quit_table, username=self.username)
+                    play_game_pygame(self.current_table, self.sock, my_color=self.current_color, flip_board=flip, quit_callback=self.on_leave, username=self.username)
                     self.playing = False
                     self.current_table = None
                     self.current_color = None
                     return
             time.sleep(1)
 
-    def do_create(self, arg):
-        args = shlex.split(arg)
-        if not args or args[0] not in ('white', 'black'):
-            print("Укажите цвет: white или black")
+    def do_createtable(self, arg):
+        """Create a new chess table.
+        Usage: createtable [as white|black]
+        If no color is specified, it is chosen randomly.
+        Only one active table is allowed at a time (until leave).
+        """
+        if self.current_table is not None:
+            print("Сначала покиньте текущий стол (leave), чтобы создать новый.")
             return
-        resp = send_recv(self.sock, {'action': 'create', 'color': args[0]})
-        print(resp['msg'])
-        if resp['status'] == 'ok':
-            self.current_table = resp['data']['table_id']
-            self.current_color = args[0]
-            self.wait_for_opponent_and_start()
+        args = shlex.split(arg)
+        if not args:
+            resp = send_recv(self.sock, {'action': 'createtable'})
+            print(resp['msg'])
+            if resp['status'] == 'ok':
+                self.current_table = resp['data']['table_id']
+                self.current_color = resp['data']['color']
+                print(f"Таблица создана. Ваш цвет: {self.current_color}.")
+                print("Ждём соперника... Когда он появится, вы получите уведомление.")
+                self.start_table_watcher()
+        elif len(args) == 2 and args[0].lower() == "as" and args[1] in ("white", "black"):
+            color = args[1]
+            resp = send_recv(self.sock, {'action': 'createtable', 'color': color})
+            print(resp['msg'])
+            if resp['status'] == 'ok':
+                self.current_table = resp['data']['table_id']
+                self.current_color = color
+                print(f"Таблица создана. Ваш цвет: {self.current_color}.")
+                print("Ждём соперника... Когда он появится, вы получите уведомление.")
+                self.start_table_watcher()
+        else:
+            print("Используйте: createtable или createtable as white|black")
+
+
+    def complete_createtable(self, text, line, begidx, endidx):
+        parts = shlex.split(line)
+        if len(parts) == 1:
+            return ['as'] if 'as'.startswith(text) else []
+        if len(parts) == 2:
+            return [c for c in ['white', 'black'] if c.startswith(text)]
+        return []
 
     def do_list(self, arg):
+        """Show the list of all tables, their players, and status.
+        Usage: list
+        """
         resp = send_recv(self.sock, {'action': 'list_tables'})
         for t in resp['data']:
             print(f"Table {t['id']} | White: {t['white']} | Black: {t['black']} | InGame: {t['in_game']}")
 
     def do_join(self, arg):
-        args = shlex.split(arg)
-        if len(args) < 2:
-            print("Пример: join 1 white")
-            return
-        resp = send_recv(self.sock, {'action': 'join', 'table_id': int(args[0]), 'color': args[1]})
-        print(resp['msg'])
-        if resp['status'] == 'ok':
-            self.current_table = int(args[0])
-            self.current_color = args[1]
-            self.wait_for_opponent_and_start()
-
-    def on_quit_table(self):
+        """Join an existing chess table.
+        Usage: join [id]
+        Without arguments — fast join to the first available table.
+        Only one active table is allowed at a time (until leave).
+        """
         if self.current_table is not None:
-            send_recv(self.sock, {'action': 'quit_table', 'table_id': self.current_table, 'color': self.current_color, 'user': self.username})
+            print("Сначала покиньте текущий стол (leave), чтобы присоединиться к другому.")
+            return
+        args = shlex.split(arg)
+        if not args:
+            resp = send_recv(self.sock, {'action': 'join'})
+            print(resp['msg'])
+            if resp['status'] == 'ok':
+                self.current_table = resp['data']['table_id']
+                self.current_color = resp['data']['color']
+                print(f"Вы присоединились к столу {self.current_table} как {self.current_color}.")
+                print("Ждём соперника... Когда он появится, вы получите уведомление.")
+                self.start_table_watcher()
+        else:
+            try:
+                tid = int(args[0])
+            except ValueError:
+                print("Некорректный id")
+                return
+            resp = send_recv(self.sock, {'action': 'join', 'table_id': tid})
+            print(resp['msg'])
+            if resp['status'] == 'ok':
+                self.current_table = tid
+                self.current_color = resp['data']['color']
+                print(f"Вы присоединились к столу {self.current_table} как {self.current_color}.")
+                print("Ждём соперника... Когда он появится, вы получите уведомление.")
+                self.start_table_watcher()
+
+    def complete_join(self, text, line, begidx, endidx):
+        resp = send_recv(self.sock, {'action': 'list_tables'})
+        ids = [str(t['id']) for t in resp['data']]
+        return [i for i in ids if i.startswith(text)]
+
+    def on_leave(self):
+        if self.current_table is not None:
+            send_recv(self.sock, {'action': 'leave', 'table_id': self.current_table, 'color': self.current_color, 'user': self.username})
             self.current_table = None
             self.current_color = None
             self.playing = False
+            if hasattr(self, 'polling_stop'):
+                self.polling_stop.set()
             print("Вы покинули стол.")
 
-    def do_quit_table(self, arg):
-        'quit_table -- выйти со стола'
-        self.on_quit_table()
+    def start_table_watcher(self):
+        import threading
+        if hasattr(self, 'polling_thread') and self.polling_thread and self.polling_thread.is_alive():
+            self.polling_stop.set()
+            self.polling_thread.join()
+        self.polling_stop = threading.Event()
+        self.game_start_request.clear()
+        self.polling_thread = threading.Thread(target=self.table_watcher, daemon=True)
+        self.polling_thread.start()
+
+    def table_watcher(self):
+        import time
+        notified = False
+        while not self.polling_stop.is_set() and self.current_table and self.current_color and not notified:
+            resp = send_recv(self.sock, {'action': 'list_tables'})
+            for t in resp['data']:
+                if t['id'] == self.current_table and t['white'] and t['black']:
+                    other = t['white'] if self.current_color == 'black' else t['black']
+                    if other and other != self.username:
+                        print(f"\nИгрок {other} готов с вами сыграть! Введите команду play для старта партии.")
+                        print(self.prompt, end='', flush=True)
+                        notified = True
+                        return
+            time.sleep(1)
+
+
+    def do_play(self, arg):
+        """Start the game if both players have joined the table and are ready.
+        Usage: play
+        The game window will open and the terminal will be blocked until the game ends or you exit.
+        """
+        if self.current_table is None or self.current_color is None:
+            print("Нет активного стола. Сначала создайте или присоединитесь.")
+            return
+        resp = send_recv(self.sock, {'action': 'list_tables'})
+        for t in resp['data']:
+            if t['id'] == self.current_table and t['white'] and t['black']:
+                send_recv(self.sock, {'action': 'ready_play', 'table_id': self.current_table, 'user': self.username})
+                flip = (self.current_color == 'black')
+                self.playing = True
+                play_game_pygame(self.current_table, self.sock, my_color=self.current_color, flip_board=flip, quit_callback=self.on_leave, username=self.username)
+                self.playing = False
+                self.current_table = None
+                self.current_color = None
+                return
+        print("Соперник еще не подключился! Ждите оповещения.")
+
+    def do_leave(self, arg):
+        """Leave the current table (exit the game/lobby).
+        Usage: leave
+        After leaving, you can create or join another table.
+        """
+        self.on_leave()
 
     def do_view(self, arg):
+        """Watch a game at the selected table in spectator mode.
+        Usage: view <id>
+        """
         args = shlex.split(arg)
         if not args:
             print("Укажите номер стола")
@@ -441,8 +606,12 @@ class ChessCmd(cmd.Cmd):
         play_game_pygame(table_id, self.sock, my_color=None, flip_board=False, username=self.username)
 
     def do_quit(self, arg):
+        """Exit the client.
+        Usage: quit
+        Automatically leaves the current table before exiting.
+        """
         print("Выход...")
-        self.on_quit_table()
+        self.on_leave()
         return True
 
     def complete_join(self, text, line, begidx, endidx):
@@ -460,6 +629,6 @@ class ChessCmd(cmd.Cmd):
 
 if __name__ == '__main__':
     if len(sys.argv) < 2 or not sys.argv[1].strip():
-        print("Использование: python client.py <имя_пользователя>")
+        print("Использование: python3 client.py <имя_игрока>")
         sys.exit(1)
     ChessCmd(sys.argv[1].strip()).cmdloop()
