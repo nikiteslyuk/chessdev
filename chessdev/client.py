@@ -285,12 +285,18 @@ def play_game_pygame(
                         drag_sq, drag_pos = sq, e.pos
                         legal_sqs, capture_sqs = set(), set()
                         for mv in board.legal_moves:
-                            if mv.from_square == sq:
-                                (
-                                    capture_sqs
-                                    if board.piece_at(mv.to_square)
-                                    else legal_sqs
-                                ).add(mv.to_square)
+                                if mv.from_square == sq:
+                                    if board.piece_at(mv.to_square):
+                                        capture_sqs.add(mv.to_square)
+                                    elif (
+                                        board.piece_at(sq).piece_type == chess.PAWN
+                                        and board.ep_square is not None
+                                        and mv.to_square == board.ep_square
+                                    ):
+                                        capture_sqs.add(mv.to_square)
+                                    else:
+                                        legal_sqs.add(mv.to_square)
+
                 elif e.type == pygame.MOUSEMOTION and drag_sq:
                     drag_pos = e.pos
                 elif e.type == pygame.MOUSEBUTTONUP and e.button == 1 and drag_sq:
@@ -582,10 +588,10 @@ class ChessCmd(cmd.Cmd):
             time.sleep(1)
 
     def do_createtable(self, arg):
-        """Create a new chess table.
-        Usage: createtable [as white|black]
-        If no color is specified, it is chosen randomly.
-        Only one active table is allowed at a time (until leave).
+        """Создать новый стол для игры. 
+        Использование: createtable [as white|black]
+        Если цвет не указан, выбирается случайным образом.
+        Можно создать только один стол одновременно (до leave).
         """
         if self.current_table is not None:
             print("Сначала покиньте текущий стол (leave), чтобы создать новый.")
@@ -624,8 +630,8 @@ class ChessCmd(cmd.Cmd):
         return []
 
     def do_list(self, arg):
-        """Show the list of all tables, their players, and status.
-        Usage: list
+        """Показать список всех столов, их игроков и статус.
+        Использование: list
         """
         resp = send_recv(self.sock, {"action": "list_tables"})
         for t in resp["data"]:
@@ -634,10 +640,10 @@ class ChessCmd(cmd.Cmd):
             )
 
     def do_join(self, arg):
-        """Join an existing chess table.
-        Usage: join [id]
-        Without arguments — fast join to the first available table.
-        Only one active table is allowed at a time (until leave).
+        """Присоединиться к существующему столу.
+        Использование: join [id]
+        Без аргументов — быстрое присоединение к свободному столу.
+        Можно присоединиться только к одному столу одновременно (до leave).
         """
         if self.current_table is not None:
             print(
@@ -735,9 +741,9 @@ class ChessCmd(cmd.Cmd):
             time.sleep(1)
 
     def do_play(self, arg):
-        """Start the game if both players have joined the table and are ready.
-        Usage: play
-        The game window will open and the terminal will be blocked until the game ends or you exit.
+        """Начать игру, если оба игрока присоединились к столу и готовы.
+        Использование: play
+        Окно игры откроется и терминал будет заблокирован до окончания партии или выхода.
         """
         if self.current_table is None or self.current_color is None:
             print("Нет активного стола. Сначала создайте или присоединитесь.")
@@ -770,29 +776,39 @@ class ChessCmd(cmd.Cmd):
         print("Соперник еще не подключился! Ждите оповещения.")
 
     def do_leave(self, arg):
-        """Leave the current table (exit the game/lobby).
-        Usage: leave
-        After leaving, you can create or join another table.
+        """Покинуть текущий стол (выйти из партии/лобби).
+        Использование: leave
+        После выхода можно создать или присоединиться к другому столу.
         """
         self.on_leave()
 
     def do_view(self, arg):
-        """Watch a game at the selected table in spectator mode.
-        Usage: view <id>
+        """Посмотреть партию за выбранным столом в режиме зрителя.
+        Использование: view <id>
         """
         args = shlex.split(arg)
         if not args:
             print("Укажите номер стола")
             return
-        table_id = int(args[0])
+        try:
+            table_id = int(args[0])
+        except ValueError:
+            print("Некорректный номер стола")
+            return
+        resp = send_recv(self.sock, {"action": "list_tables"})
+        table_exists = any(t["id"] == table_id for t in resp["data"])
+        if not table_exists:
+            print("Нет такого стола")
+            return
         play_game_pygame(
             table_id, self.sock, my_color=None, flip_board=False, username=self.username
         )
 
+
     def do_quit(self, arg):
-        """Exit the client.
-        Usage: quit
-        Automatically leaves the current table before exiting.
+        """Завершить работу клиента.
+        Использование: quit
+        Перед выходом автоматически покидает текущий стол.
         """
         print("Выход...")
         self.on_leave()
